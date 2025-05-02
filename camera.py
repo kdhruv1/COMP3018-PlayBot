@@ -1,60 +1,50 @@
-# Python camera.py
 import cv2
 from pyzbar.pyzbar import decode
-import threading
 import time
 
-# Simple registry
-_subs = {'card': [], 'emotion': []}
-
-def subscribe(event, callback):
-    """Subscribe a callback to 'card' or 'emotion' events."""
-    _subs[event].append(callback)
-
-def _publish(event, data):
-    for cb in _subs.get(event, []):
-        cb(data)
+_last_qr = None
+_last_emotion = None
+qr_detected_callback = None
+emotion_callback = None
 
 def classify_emotion(frame):
-    """
-    Emotion stub: replace with real model if you like.
-    For now, toggles every 5 seconds between 'neutral' and 'sad'.
-    """
-    t = int(time.time())//5
-    return ['neutral','sad','happy'][t % 3]
+    return "neutral" # Replace with actual model
 
-def camera_loop(cam_index=0):
-    cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        raise RuntimeError("Cannot open camera")
+def run_camera(qr_callback, emotion_callback_fn, cam_index=0):
+    global _last_qr, _last_emotion, qr_detected_callback, emotion_callback
+    qr_detected_callback = qr_callback
+    emotion_callback = emotion_callback_fn
+
+    cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW) # Try CAP_MSMF if DSHOW fails
 
     while True:
         ret, frame = cap.read()
         if not ret:
+            print("Camera read failed")
             break
 
-        # QR code detection
+        # QR detection
         codes = decode(frame)
         if codes:
             qr = codes[0]
-            text = qr.data.decode('utf-8') # Example "10 of Clubs"
-            # Approximate pose = center of polygon in pixel coords
-            pts = [(p.x, p.y) for p in qr.polygon]
-            cx = sum(x for x,y in pts)/len(pts)
-            cy = sum(y for x,y in pts)/len(pts)
-            _publish('card', {'text': text, 'pose': (cx, cy)})
+            text = qr.data.decode('utf-8')
+            center = tuple(map(int, [sum(p.x for p in qr.polygon)/len(qr.polygon),
+                                     sum(p.y for p in qr.polygon)/len(qr.polygon)]))
+            if text != _last_qr:
+                _last_qr = text
+                qr_detected_callback(text, center)
 
-        # 2) Emotion classification
-        emotion = classify_emotion(frame)
-        _publish('emotion', emotion)
+        # Emotion (limited to 1 Hz)
+        if int(time.time()) % 1 == 0:
+            emotion = classify_emotion(frame)
+            if emotion != _last_emotion:
+                _last_emotion = emotion
+                emotion_callback(emotion)
 
-        # Show for debug
-        cv2.imshow('Camera', frame)
-        if cv2.waitKey(1) & 0xFF == 27: # ESC to quit
+        # Show camera window
+        cv2.imshow("View", frame)
+        if cv2.waitKey(1) & 0xFF == 27:
             break
 
     cap.release()
     cv2.destroyAllWindows()
-
-if __name__ == '__main__':
-    camera_loop()
