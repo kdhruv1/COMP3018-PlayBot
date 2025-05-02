@@ -1,4 +1,4 @@
-# pip install opencv-python pyzbar pillow
+# pip install opencv-python pyzbar pillow deepface
 # python gesture.py
 from camera_win import subscribe
 
