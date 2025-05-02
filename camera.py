@@ -1,3 +1,4 @@
+# Python camera.py
 import cv2
 from pyzbar.pyzbar import decode
 import threading
