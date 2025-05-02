@@ -11,11 +11,6 @@ qr_detected_callback = None
 emotion_callback = None
 
 def classify_emotion(frame):
-    """
-    Runs DeepFace emotion analysis on the BGR frame.
-    Returns one of: 'angry', 'disgust', 'fear', 'happy', 'sad', 'surprise', 'neutral'.
-    Falls back to 'neutral' if detection fails.
-    """
     try:
         # DeepFace expects RGB
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
