@@ -1,22 +1,19 @@
-# pip install opencv-python pyzbar pillow deepface
-# python gesture.py
-from camera_win import subscribe
+from naoqi import ALProxy
+import tf2_ros  # optional if you compute 3D from pose
 
-def gesture_to_card(data):
-    text = data['text']
-    pose = data['pose']  # (x_pix, y_pix)
-    print(f">>> [Gesture] Pointing at '{text}' located at pixel {pose}")
+class GestureBehavior(object):
+    def __init__(self, session):
+        self.mem    = session.service("ALMemory")
+        self.motion = session.service("ALMotion")
+        self.mem.subscribeToEvent("Game/LastQR", "GestureBehavior", "onCard")
 
-def main():
-    subscribe('card', gesture_to_card)
-    print("Waiting for QR scans to gesture at...")
-    try:
-        # Keep alive
-        import time
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nGesture node stopped.")
-
-if __name__ == '__main__':
-    main()
+    def onCard(self, key, value, msg):
+        # simple arm point: open hand and extend
+        effector = "RArm"
+        self.motion.openHand(effector)
+        # point by setting shoulder pitch/roll
+        self.motion.setAngles("RShoulderPitch", 0.5, 0.1)
+        self.motion.setAngles("RShoulderRoll", -0.2, 0.1)
+        # after a pause, return to rest
+        time.sleep(1.0)
+        self.motion.rest()  
