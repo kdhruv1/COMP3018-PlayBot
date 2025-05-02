@@ -26,11 +26,6 @@ def classify_emotion(frame):
         return "neutral"
 
 def run_camera(qr_callback, emotion_callback_fn, cam_index=0):
-    """
-    Captures frames, publishes unique QR scans and emotion changes.
-    qr_callback(text, center): called on new QR string
-    emotion_callback_fn(emotion_str): called on new emotion
-    """
     global _last_qr, _last_emotion, qr_detected_callback, emotion_callback
     qr_detected_callback = qr_callback
     emotion_callback = emotion_callback_fn
