@@ -1,0 +1,43 @@
+import os
+import qrcode
+from PIL import Image, ImageDraw, ImageFont
+
+# Define cards
+suits = {'S': 'Spades', 'H': 'Hearts', 'C': 'Clubs', 'D': 'Diamonds'}
+ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']
+
+# Set directory
+out_dir = r'C:\Users\conno\Downloads\collection'
+os.makedirs(out_dir, exist_ok=True)
+
+# Generate QR codes loop
+for suit_code in suits:
+    for rank in ranks:
+        card_name = f"{rank} of {suits[suit_code]}"
+        # QR generation
+        qr = qrcode.QRCode(
+            version=3,
+            error_correction=qrcode.constants.ERROR_CORRECT_Q,
+            box_size=10,
+            border=4
+        )
+        qr.add_data(card_name)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="black", back_color="white").convert('RGB')
+
+        # Add text under QR code
+        draw = ImageDraw.Draw(img)
+        font = ImageFont.load_default()
+        bbox = draw.textbbox((0, 0), card_name, font=font)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        draw.text(
+            ((img.width - text_w) / 2, img.height - text_h - 5),
+            card_name, font=font, fill=(0, 0, 0)
+        )
+
+        # Save image
+        filename = card_name.replace(" ", "_") + ".png"
+        img.save(os.path.join(out_dir, filename))
+
+print(f"All QR codes saved to: {out_dir}")
