@@ -1,103 +1,76 @@
+from naoqi import ALProxy
 import random
-import time
-from camera_win import run_camera
 
-deck = [f"{r} of {s}" for s in ['Hearts', 'Diamonds', 'Clubs', 'Spades']
-                       for r in ['2','3','4','5','6','7','8','9','10','Jack','Queen','King','Ace']]
+class BlackjackBehavior(object):
+    def __init__(self, session):
+        self.mem = session.service("ALMemory")
+        self.tts = session.service("ALTextToSpeech")
+        self.mem.subscribeToEvent("Game/LastQR", "BlackjackBehavior", "onNewCard")
+        self.mem.subscribeToEvent("Game/LastEmotion", "BlackjackBehavior", "onEmotion")
 
-values = {
-    **{str(i): i for i in range(2, 11)},
-    'Jack': 10, 'Queen': 10, 'King': 10, 'Ace': 11
-}
+        # build deck
+        self.full_deck = [f"{r} of {s}" for s in ['Hearts','Diamonds','Clubs','Spades']
+                                        for r in ['2','3','4','5','6','7','8','9','10','Jack','Queen','King','Ace']]
+        self.resetRound()
 
-def card_value(card):
-    rank = card.split(' ')[0]
-    return values[rank]
+    def resetRound(self):
+        self.deck = self.full_deck[:]
+        random.shuffle(self.deck)
+        self.player = []
+        self.robot  = [self.deck.pop(), self.deck.pop()]
+        self.tts.say("New round started, please show me your two cards.")
 
-def hand_value(hand):
-    total = sum(card_value(c) for c in hand)
-    aces = sum(1 for c in hand if c.startswith('Ace'))
-    while total > 21 and aces:
-        total -= 10
-        aces -= 1
-    return total
+    def onNewCard(self, key, value, msg):
+        card = value  # "10 of Clubs"
+        if len(self.player) < 2 and card in self.deck:
+            self.player.append(card)
+            self.deck.remove(card)
+            self.tts.say(f"I see you have {card}.")
+            if len(self.player) == 2:
+                self.playRobot()
 
-# State
-player_hand = []
-robot_hand = []
-emotion = "neutral"
-player_wins = 0
-robot_wins = 0
-current_qrs = set()
+    def onEmotion(self, key, value, msg):
+        self.emotion = value  # "happy", "sad", etc.
 
-def on_qr(text, pos):
-    if text not in current_qrs and text in deck:
-        print(f"[SCAN] You scanned: {text}")
-        player_hand.append(text)
-        current_qrs.add(text)
+    def playRobot(self):
+        # emotion‐based threshold
+        thresh = 17
+        if self.emotion == "sad":   thresh = 16
+        if self.emotion == "happy": thresh = 18
 
-def on_emotion(e):
-    global emotion
-    print(f"[EMOTION] {e}")
-    emotion = e
+        # robot hits
+        while self.handValue(self.robot) < thresh:
+            c = self.deck.pop()
+            self.robot.append(c)
+            self.tts.say(f"I draw {c}.")
 
-def dealer_strategy(threshold):
-    while hand_value(robot_hand) < threshold:
-        card = random.choice(deck)
-        robot_hand.append(card)
-        print(f"[ROBOT] Hits: {card}")
+        # dealer (simple sim)
+        dealer = []
+        while self.handValue(dealer) < 17:
+            dealer.append(self.deck.pop())
 
-def play_round():
-    global player_hand, robot_hand, current_qrs, player_wins, robot_wins
+        # compare
+        p_val, r_val, d_val = self.handValue(self.player), self.handValue(self.robot), self.handValue(dealer)
+        self.tts.say(f"You: {p_val}, Me: {r_val}, Dealer: {d_val}.")
+        if (p_val>21) or (r_val<=21 and r_val>p_val):
+            self.tts.say("I win!")
+        elif (r_val>21) or (p_val>r_val):
+            self.tts.say("You win!")
+        else:
+            self.tts.say("It's a tie!")
 
-    player_hand = []
-    robot_hand = []
-    current_qrs.clear()
+        # start next round
+        self.resetRound()
 
-    print("\n[ROUND] Please scan 2 cards.")
-    start = time.time()
-    while len(player_hand) < 2 and time.time() - start < 20:
-        time.sleep(0.2)
-
-    print(f"Your hand: {player_hand} (value = {hand_value(player_hand)})")
-
-    # Adjust robot strategy based on emotion & scores
-    if emotion == 'sad' and player_wins < robot_wins:
-        threshold = 19 # Easier on sad player
-    elif emotion == 'happy' and player_wins > robot_wins:
-        threshold = 17 # Robot plays stronger
-    else:
-        threshold = 16 # Normal
-
-    robot_hand.append(random.choice(deck))
-    robot_hand.append(random.choice(deck))
-    print(f"[ROBOT] Starting hand: {robot_hand}")
-    dealer_strategy(threshold)
-
-    pv = hand_value(player_hand)
-    rv = hand_value(robot_hand)
-    print(f"Your total: {pv}, Robot total: {rv}")
-
-    if pv > 21:
-        print("You busted. Robot wins.")
-        robot_wins += 1
-    elif rv > 21 or pv > rv:
-        print("You win!")
-        player_wins += 1
-    elif pv < rv:
-        print("Robot wins.")
-        robot_wins += 1
-    else:
-        print("It's a tie.")
-
-def main():
-    import threading
-    t = threading.Thread(target=run_camera, args=(on_qr, on_emotion), daemon=True)
-    t.start()
-
-    while True:
-        input("\nPress Enter to play a round...")
-        play_round()
-
-if __name__ == "__main__":
-    main()
+    def handValue(self, hand):
+        vals = []
+        aces = 0
+        for c in hand:
+            r = c.split()[0]
+            if r in ["Jack","Queen","King"]: vals.append(10)
+            elif r=="Ace": vals.append(11); aces+=1
+            else: vals.append(int(r))
+        tot = sum(vals)
+        while tot>21 and aces>0:
+            tot -= 10; aces -= 1
+        return tot
