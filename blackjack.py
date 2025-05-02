@@ -1,114 +1,115 @@
-import rospy
-from std_msgs.msg import String
 import random
+import threading
+import time
+from camera_win import subscribe, camera_loop
 
-# build full deck
+# Build a new deck
 suits = ['Hearts','Diamonds','Clubs','Spades']
 ranks = ['2','3','4','5','6','7','8','9','10','Jack','Queen','King','Ace']
 full_deck = [{'rank': r, 'suit': s} for s in suits for r in ranks]
 
-# state
+# State
 player_hand = []
 robot_hand  = []
-deck         = []
-emotion_state = 'neutral'
-hit_threshold = 17
+deck        = []
+emotion     = 'neutral'
+hit_thresh  = 17
 
-def get_card_value(card):
-    if card['rank'] in ['Jack','Queen','King']:
-        return 10
-    if card['rank'] == 'Ace':
-        return 11
-    return int(card['rank'])
-
-def calculate_hand(hand):
-    total = sum(get_card_value(c) for c in hand)
-    aces  = sum(1 for c in hand if c['rank']=='Ace')
-    while total>21 and aces:
-        total -= 10
-        aces  -= 1
-    return total
-
-def emotion_callback(msg):
-    global emotion_state, hit_threshold
-    emotion_state = msg.data.lower()
-    if emotion_state == 'sad':
-        hit_threshold = 16
-    elif emotion_state == 'happy':
-        hit_threshold = 18
-    else:
-        hit_threshold = 17
-    rospy.loginfo("Emotion set to %s, threshold=%d", emotion_state, hit_threshold)
-
-def card_callback(msg):
-    """Called when a new card text arrives from camera.py"""
-    text = msg.data.strip()
+def card_callback(data):
+    """When camera_win publishes a card event."""
+    text = data['text']
     rank, _, suit = text.partition(' of ')
     card = {'rank': rank, 'suit': suit}
     if card not in player_hand:
         player_hand.append(card)
-        rospy.loginfo("You drew: %s", text)
+        print(f">>> You scanned: {text}")
 
-def deal_random(hand, count=1):
-    for _ in range(count):
-        c = random.choice(deck)
-        deck.remove(c)
-        hand.append(c)
+def emotion_callback(e):
+    """Update emotion and threshold."""
+    global emotion, hit_thresh
+    emotion = e
+    if emotion == 'sad':
+        hit_thresh = 16
+    elif emotion == 'happy':
+        hit_thresh = 18
+    else:
+        hit_thresh = 17
+    print(f">>> Emotion: {emotion}. Robot hit threshold set to {hit_thresh}")
+
+def card_value(c):
+    if c['rank'] in ['Jack','Queen','King']: return 10
+    if c['rank']=='Ace': return 11
+    return int(c['rank'])
+
+def hand_value(hand):
+    v = sum(card_value(c) for c in hand)
+    aces = sum(1 for c in hand if c['rank']=='Ace')
+    while v>21 and aces:
+        v -= 10; aces -= 1
+    return v
 
 def play_round():
     global deck, player_hand, robot_hand
     deck = full_deck.copy()
     random.shuffle(deck)
     player_hand = []
-    robot_hand  = []
+    robot_hand  = [deck.pop(), deck.pop()]
 
-    # deal initial two cards
-    deal_random(player_hand, 2)
-    deal_random(robot_hand, 2)
+    print("\n=== New Round ===")
+    print(f"Robot initial hand: {[f\"{c['rank']} of {c['suit']}\" for c in robot_hand]}")
 
-    rospy.loginfo("Starting round. Robot has %d and %d",
-                  get_card_value(robot_hand[0]), get_card_value(robot_hand[1]))
+    # Wait up to 10s for you to scan your two cards
+    start = time.time()
+    while len(player_hand)<2 and time.time()-start<10:
+        time.sleep(0.1)
 
-    # robot (auto) plays
-    while calculate_hand(robot_hand) < hit_threshold:
+    print(f"Your hand: {[f\"{c['rank']} of {c['suit']}\" for c in player_hand]}")
+    print(f"Robot threshold = {hit_thresh}")
+
+    # Robot hits until reaching threshold
+    while hand_value(robot_hand) < hit_thresh:
         c = deck.pop()
         robot_hand.append(c)
-        rospy.loginfo("Robot hits and draws %s of %s", c['rank'], c['suit'])
-        rospy.sleep(0.5)
+        print(f"Robot hits and draws {c['rank']} of {c['suit']} → total {hand_value(robot_hand)}")
+        time.sleep(0.5)
 
-    rospy.loginfo("Robot stands with total %d", calculate_hand(robot_hand))
+    print(f"Robot stands with {hand_value(robot_hand)}")
 
-    # dealer
+    # Dealer play (simple auto 17 rule)
     dealer = []
-    while sum(get_card_value(c) for c in dealer) < 17:
+    while hand_value(dealer)<17:
         c = deck.pop()
         dealer.append(c)
+    print(f"Dealer hand: {[f\"{c['rank']} of {c['suit']}\" for c in dealer]} → {hand_value(dealer)}")
 
-    # evaluate
-    p_total = calculate_hand(player_hand)
-    r_total = calculate_hand(robot_hand)
-    d_total = calculate_hand(dealer)
-    rospy.loginfo("Final totals → You: %d  Robot: %d  Dealer: %d", p_total, r_total, d_total)
-
-    if p_total>21 or (r_total<=21 and r_total>p_total):
-        rospy.loginfo("Robot wins!")
-    elif r_total>21 or p_total>r_total:
-        rospy.loginfo("You win!")
+    # Final compare
+    pv = hand_value(player_hand)
+    rv = hand_value(robot_hand)
+    dv = hand_value(dealer)
+    print(f"Totals → You: {pv}, Robot: {rv}, Dealer: {dv}")
+    if pv>21 or (rv<=21 and rv>pv):
+        print("*** Robot wins! ***")
+    elif rv>21 or pv>rv:
+        print("*** You win! ***")
     else:
-        rospy.loginfo("Tie!")
+        print("*** It's a tie! ***")
 
 def main():
-    rospy.init_node('blackjack_node')
-    rospy.Subscriber('/player_emotion', String, emotion_callback)
-    rospy.Subscriber('/detected_card_text', String, card_callback)
+    # Subscribe first
+    subscribe('card',    card_callback)
+    subscribe('emotion', emotion_callback)
 
-    rate = rospy.Rate(0.1)  # 1 round every 10 seconds
-    while not rospy.is_shutdown():
-        play_round()
-        rate.sleep()
+    # Start camera in background thread
+    cam_t = threading.Thread(target=camera_loop, daemon=True)
+    cam_t.start()
+
+    # Game loop
+    try:
+        while True:
+            play_round()
+            time.sleep(2)
+    except KeyboardInterrupt:
+        print("\nExiting...")
 
 if __name__ == '__main__':
-    try:
-        main()
-    except rospy.ROSInterruptException:
-        pass
+    main()
