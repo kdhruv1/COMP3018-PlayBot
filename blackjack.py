@@ -1,114 +1,106 @@
-#!/usr/bin/env python
 import rospy
-from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
 from collections import deque
+from blackjack_core import get_card_value, calculate_hand  # import your reusable functions
 
-class BlackjackPlayer:
+class BlackjackRobotPlayer:
     def __init__(self):
         rospy.init_node('blackjack_player')
+        self.card_sub = rospy.Subscriber('/detected_card_text', String, self.card_callback)
+        self.emotion_sub = rospy.Subscriber('/player_emotion', String, self.emotion_callback)
+        self.move_pub = rospy.Publisher('/robot_move', String, queue_size=10)
 
-        # State
-        self.hand = []
-        self.known_cards = set()
-        self.player_emotion = 'neutral'
-        self.win_streak = 0
-        self.last_game_result = None
+        self.player_hand = []
+        self.dealer_hand = []
+        self.round_active = False
+        self.emotion = "neutral"
+        self.previous_emotions = deque(maxlen=5)
 
-        # Subscribers
-        rospy.Subscriber('/detected_card_pose', PoseStamped, self.card_callback, queue_size=1)
-        rospy.Subscriber('/player_emotion', String, self.emotion_callback, queue_size=1)
-
-        # Publisher for game decisions (optional)
-        self.move_pub = rospy.Publisher('/robot_blackjack_move', String, queue_size=1)
-
-        rospy.loginfo("Blackjack robot player node ready.")
+        rospy.loginfo("Blackjack robot player ready.")
         rospy.spin()
 
     def emotion_callback(self, msg):
-        self.player_emotion = msg.data.lower()
-        rospy.loginfo(f"[Emotion] Player seems {self.player_emotion}")
+        self.emotion = msg.data.lower()
+        self.previous_emotions.append(self.emotion)
 
     def card_callback(self, msg):
-        # Simulate card recognition from position (you should attach card label in a real system)
-        card_id = f"{msg.pose.position.x:.2f}{msg.pose.position.y:.2f}{msg.pose.position.z:.2f}"
-        if card_id in self.known_cards:
-            return  # avoid duplicate detection
-        self.known_cards.add(card_id)
+        card_text = msg.data.strip().title()  # Example: "10 Of Clubs"
+        if not self.round_active:
+            self.start_new_round()
 
-        # Simulated card (in real usage, map from position or topic label)
-        import random
-        card = random.choice([
-            '2 of hearts', '3 of diamonds', '10 of clubs',
-            'J of spades', 'A of hearts', 'K of clubs'
-        ])
-        self.hand.append(card)
-        rospy.loginfo(f"[Card] Added: {card}")
-        self.evaluate_hand()
+        if card_text not in [c['text'] for c in self.player_hand]:
+            self.player_hand.append({'text': card_text, 'value': get_card_value(card_text)})
+            rospy.loginfo(f"Card added: {card_text}")
+            self.evaluate_player_hand()
 
-    def evaluate_hand(self):
-        value = self.calculate_hand_value()
-        rospy.loginfo(f"[Hand] Current hand: {self.hand} => Total: {value}")
+    def evaluate_player_hand(self):
+        total = sum(card['value'] for card in self.player_hand)
+        rospy.loginfo(f"Player hand total: {total}")
 
-        if value > 21:
-            rospy.loginfo("[Result] BUST!")
-            self.last_game_result = 'loss'
-            self.hand.clear()
-            self.known_cards.clear()
-            return
-
-        threshold = self.dynamic_threshold()
-        if value < threshold:
-            self.take_action('hit')
+        threshold = self.get_emotion_threshold()
+        if total < threshold:
+            self.move_pub.publish("hit")
+        elif total <= 21:
+            self.move_pub.publish("stand")
+            self.play_dealer()
         else:
-            self.take_action('stand')
+            self.move_pub.publish("bust")
+            self.end_round()
 
-    def dynamic_threshold(self):
-        base = 17
-        if self.player_emotion == 'sad':
-            base -= 1  # play more aggressively
-        elif self.player_emotion == 'happy' and self.win_streak > 1:
-            base += 1  # play more conservatively
-        rospy.loginfo(f"[AI] Adjusted hit threshold: {base}")
-        return base
+    def get_emotion_threshold(self):
+        """
+        Determines hit/stand threshold based on emotion.
+        """
+        emotion = self.emotion
+        if emotion == 'sad':
+            return 19  # Robot plays aggressively
+        elif emotion == 'happy':
+            return 16  # Robot takes more risk
+        return 17
 
-    def take_action(self, action):
-        rospy.loginfo(f"[Move] Robot chooses to: {action.upper()}")
-        self.move_pub.publish(action)
+    def play_dealer(self):
+        # Simulated dealer logic (replace with real dealer node if you have one)
+        self.dealer_hand = self.simulate_dealer()
+        player_total = sum(card['value'] for card in self.player_hand)
+        dealer_total = sum(card['value'] for card in self.dealer_hand)
 
-        if action == 'stand':
-            # Simulate outcome (replace with real game logic)
-            import random
-            result = random.choice(['win', 'loss'])
-            self.last_game_result = result
-            if result == 'win':
-                self.win_streak += 1
-            else:
-                self.win_streak = 0
-            rospy.loginfo(f"[Result] Robot {result.upper()}!")
-            self.hand.clear()
-            self.known_cards.clear()
+        rospy.loginfo(f"Dealer total: {dealer_total}")
+        result = self.compare_totals(player_total, dealer_total)
+        self.move_pub.publish(result)
+        self.end_round()
 
-    def calculate_hand_value(self):
+    def simulate_dealer(self):
+        # Dummy logic — replace with real card scanning or rules
+        import random
+        dealer = []
         total = 0
-        aces = 0
-        for card in self.hand:
-            rank = card.split()[0]
-            if rank in ['J', 'Q', 'K']:
-                total += 10
-            elif rank == 'A':
-                aces += 1
-                total += 11
-            else:
-                total += int(rank)
+        while total < 17:
+            value = random.randint(2, 11)
+            total += value
+            dealer.append({'value': value})
+        return dealer
 
-        while total > 21 and aces:
-            total -= 10
-            aces -= 1
-        return total
+    def compare_totals(self, player, dealer):
+        if dealer > 21 or player > dealer:
+            return "win"
+        elif player < dealer:
+            return "lose"
+        else:
+            return "tie"
+
+    def start_new_round(self):
+        self.player_hand.clear()
+        self.dealer_hand.clear()
+        self.round_active = True
+        rospy.loginfo("Starting new round.")
+
+    def end_round(self):
+        rospy.sleep(2)
+        self.round_active = False
+        rospy.loginfo("Round complete.\n---\n")
 
 if __name__ == '__main__':
     try:
-        BlackjackPlayer()
+        BlackjackRobotPlayer()
     except rospy.ROSInterruptException:
         pass
